@@ -2,6 +2,7 @@
 name = "tcov"
 version = "0.1.0"
 edition = "2021"
+authors = ["Wenjie Wei <wjwei9908@gmail.com>",]
 
 [dependencies]
 anyhow = "1.0.86"
