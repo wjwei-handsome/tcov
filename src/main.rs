@@ -1,13 +1,12 @@
+mod cov;
 use std::{
     error::Error,
     io,
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
-use rand::{
-    distributions::{Distribution, Uniform},
-    rngs::ThreadRng,
-};
+use cov::{DefaultReadFilter, OnlyDepthProcessor};
 use ratatui::{
     crossterm::{
         event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -18,38 +17,55 @@ use ratatui::{
     widgets::{Block, Paragraph, Sparkline},
 };
 
-#[derive(Clone)]
-struct RandomSignal {
-    distribution: Uniform<u64>,
-    rng: ThreadRng,
-}
-
-impl RandomSignal {
-    fn new(lower: u64, upper: u64) -> Self {
-        Self {
-            distribution: Uniform::new(lower, upper),
-            rng: rand::thread_rng(),
-        }
-    }
-}
-
-impl Iterator for RandomSignal {
-    type Item = u64;
-    fn next(&mut self) -> Option<u64> {
-        Some(self.distribution.sample(&mut self.rng))
-    }
-}
-
 struct App {
-    data1: Vec<u64>,
+    data: Vec<u64>,
+    legend: String,
+    view_start: usize,
+    view_end: usize,
+    label_start: usize,
+    label_end: usize,
+    max_width: u16,
 }
 
 impl App {
-    fn new() -> Self {
-        let mut signal = RandomSignal::new(0, 100);
-        let data1 = signal.by_ref().take(200).collect::<Vec<u64>>();
+    fn new(data: Vec<u64>, legend: String, width: u16, label_start: usize) -> Self {
+        let view_end = if data.len() > width.into() {
+            width as usize
+        } else {
+            data.len()
+        };
+        let label_end = label_start + width as usize;
+        Self {
+            data,
+            legend,
+            view_start: 0,
+            view_end,
+            label_start,
+            label_end,
+            max_width: width,
+        }
+    }
 
-        Self { data1 }
+    // 添加方法来更新 view_start 和 view_end
+    fn move_view(&mut self, direction: i32) {
+        let label_view_diff = self.label_start as i32 - self.view_start as i32;
+        let max_view_size = self.max_width as usize;
+        let data_len = self.data.len();
+        if direction < 0 && self.view_start > 0 {
+            self.view_start = self.view_start.saturating_sub(10);
+            self.view_end = usize::min(self.view_start + max_view_size, data_len);
+        } else if direction > 0 && self.view_end < data_len {
+            if self.view_end + 10 > data_len {
+                let sub = data_len - self.view_end;
+                self.view_end = data_len;
+                self.view_start = self.view_start.saturating_sub(sub);
+            } else {
+                self.view_end += 10;
+                self.view_start = self.view_end - max_view_size;
+            }
+        }
+        self.label_start = self.view_start + label_view_diff as usize;
+        self.label_end = self.view_end + label_view_diff as usize;
     }
 }
 
@@ -61,9 +77,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let size = terminal.size()?;
+    let width = size.width;
+
+    let read_filter = DefaultReadFilter::new(0, 0, 0);
+    let bam_path = PathBuf::from("test.bam"); // check it
+    let depth_processer = OnlyDepthProcessor::new(bam_path, read_filter);
+    let res = depth_processer.process_region("2", 2078887, 2079669)?;
+
+    let data = res.iter().map(|x| x.depth as u64).collect();
+
     // create app and run it
     let tick_rate = Duration::from_millis(250);
-    let app = App::new();
+    let app = App::new(data, "aaaaa".to_string(), width, 2078887);
     let res = run_app(&mut terminal, app, tick_rate);
 
     // restore terminal
@@ -84,7 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
-    app: App,
+    mut app: App,
     tick_rate: Duration,
 ) -> io::Result<()> {
     let last_tick = Instant::now();
@@ -94,8 +120,11 @@ fn run_app<B: Backend>(
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') {
-                    return Ok(());
+                match key.code {
+                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Left => app.move_view(-10), // set flexible view size
+                    KeyCode::Right => app.move_view(10),
+                    _ => {}
                 }
             }
         }
@@ -115,16 +144,20 @@ fn ui(f: &mut Frame, app: &App) {
             .as_ref(),
         )
         .split(full);
+
     let sparkline = Sparkline::default()
-        .block(Block::new().title("Data1"))
-        .data(&app.data1)
+        .block(Block::new().title(app.legend.as_str()))
+        .data(&app.data[app.view_start..app.view_end])
         .style(Style::default().fg(Color::Yellow));
     f.render_widget(sparkline, chunks[0]);
 
     // a test case
-    let formatted_label = generate_and_format_label(2078687, 2079869, chunks[1].width as usize);
+    // let formatted_label = generate_and_format_label(2078687, 2079869, chunks[1].width as usize);
 
-    let label_paragraph = Paragraph::new(formatted_label).style(Style::default().fg(Color::White));
+    let fmt_label =
+        generate_and_format_dynamic_label(app.label_start, app.label_end, chunks[1].width as usize);
+
+    let label_paragraph = Paragraph::new(fmt_label).style(Style::default().fg(Color::White));
     f.render_widget(label_paragraph, chunks[1]);
 }
 
@@ -165,4 +198,17 @@ fn generate_and_format_label(start: i64, end: i64, axis_width: usize) -> String 
 
     // join three lines
     new_labels_display.join("\n")
+}
+
+fn generate_and_format_dynamic_label(
+    label_start: usize,
+    label_end: usize,
+    axis_width: usize,
+) -> String {
+    let start_label = format!("{:09}", label_start);
+    let end_label = format!("{:09}", label_end);
+
+    // compute the space between start and end
+    let space = " ".repeat(axis_width - start_label.len() - end_label.len());
+    format!("{}{}{}", start_label, space, end_label)
 }
