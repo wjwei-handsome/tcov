@@ -65,7 +65,7 @@ Filter Options:
 
 ## TODO
 
-[ ] Maybe multiple tracks support ??
+- [ ] Maybe multiple tracks support ??
 
 ## CONTRIBUTING
 
