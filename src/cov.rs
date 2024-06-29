@@ -4,7 +4,6 @@ use rust_htslib::bam::pileup::Alignment;
 use rust_htslib::bam::record::Record;
 use rust_htslib::{bam, bam::ext::BamRecordExtensions, bam::record::Cigar, bam::Read};
 use std::fmt;
-// use smartstring::alias::String;
 use std::path::PathBuf;
 use std::{convert::TryFrom, rc::Rc};
 use std::{default, fmt::Display};
@@ -128,14 +127,14 @@ impl Iterator for IterAlignedBlocks {
     }
 }
 
-pub(crate) struct OnlyDepthProcessor<F: ReadFilter + Send> {
+pub(crate) struct DepthProcessor<F: ReadFilter + Send> {
     /// path to indexed BAM/CRAM
     pub reads: PathBuf,
     /// implementation of [position::ReadFilter] that will be used
     pub read_filter: F,
 }
 
-impl<F: ReadFilter + Send> OnlyDepthProcessor<F> {
+impl<F: ReadFilter + Send> DepthProcessor<F> {
     /// Create a new OnlyDepthProcessor
     pub fn new(reads: PathBuf, read_filter: F) -> Self {
         Self { reads, read_filter }
@@ -155,7 +154,6 @@ impl<F: ReadFilter + Send> OnlyDepthProcessor<F> {
             sum += count;
             let mut pos = BedGraph::new(String::from(contig), region_start + i as u32);
             pos.depth = u32::try_from(sum).expect("All depths are positive");
-            // pos.end = region_start + i as u32 + 1;
             results.push(pos);
         }
 
@@ -212,7 +210,6 @@ impl<F: ReadFilter + Send> OnlyDepthProcessor<F> {
         }
 
         // Sum the counter and merge same-depth ranges of positions
-        // let contig = std::str::from_utf8(header.tid2name(tid)).unwrap();
         self.sum_counter(counter, tid, start)
     }
 }
